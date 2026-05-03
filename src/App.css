@@ -1,0 +1,429 @@
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 24px;
+  font-weight: bold;
+  margin-bottom: 40px;
+}
+
+.logo-area .tv-icon {
+  color: var(--accent-color);
+}
+
+.nav-item {
+  padding: 12px 16px;
+  border-radius: 2px;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-item:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.nav-item.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  height: 70px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 30px;
+  justify-content: space-between;
+}
+
+.header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 0;
+  background-color: var(--bg-tertiary);
+}
+
+/* EPG Schedule */
+.schedule-container {
+  flex: 1;
+  padding: 30px;
+  overflow-y: auto;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border-radius: 0;
+  border: 1px solid var(--border-color);
+  min-height: 400px;
+  overflow-x: auto;
+  position: relative;
+}
+
+.time-header {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  height: 40px;
+  position: sticky;
+  top: 0;
+  background-color: var(--bg-secondary);
+  z-index: 2;
+}
+
+.time-slot {
+  min-width: 150px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.channels-area {
+  display: flex;
+  flex-direction: column;
+}
+
+.channel-row {
+  display: flex;
+  height: 80px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.program-block {
+  background-color: var(--bg-tertiary);
+  margin: 5px;
+  border-radius: 2px;
+  padding: 10px;
+  border-left: 4px solid var(--accent-color);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.program-block:hover {
+  filter: brightness(1.2);
+  transform: translateY(-2px);
+}
+
+.program-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.program-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Library */
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+  padding: 20px 0;
+}
+
+.video-card {
+  background-color: var(--bg-secondary);
+  border-radius: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.video-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent-color);
+}
+
+.video-thumb {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background-color: var(--bg-tertiary);
+  position: relative;
+  background-size: cover;
+  background-position: center;
+}
+
+.video-duration {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.video-info {
+  padding: 12px;
+}
+
+.video-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.video-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Auth / Connections */
+.connections-area {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.connection-card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 300px;
+}
+
+.connection-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.platform-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+
+.platform-icon.twitch {
+  background-color: #9146FF;
+  color: white;
+}
+
+.platform-icon.youtube {
+  background-color: #FF0000;
+  color: white;
+}
+
+.btn-connect {
+  background-color: var(--bg-tertiary);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.btn-connect:hover {
+  background-color: var(--accent-color);
+}
+
+/* Schedule Split Layout */
+.schedule-split {
+  display: flex;
+  gap: 20px;
+}
+
+.schedule-main {
+  flex: 3;
+}
+
+.schedule-editor {
+  flex: 1;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  padding: 20px;
+  height: fit-content;
+}
+
+.schedule-editor h3 {
+  margin-top: 0;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+}
+
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editor-form label {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.editor-form select {
+  background-color: var(--bg-tertiary);
+  color: white;
+  border: 1px solid var(--border-color);
+  padding: 8px;
+  border-radius: 2px;
+  outline: none;
+}
+
+/* Screensaver - Tela de Intervalo */
+.screensaver {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e, #141e30, #243b55, #0f0c29);
+  background-size: 400% 400%;
+  animation: screensaver-gradient 15s ease infinite;
+}
+
+@keyframes screensaver-gradient {
+  0% { background-position: 0% 50%; }
+  25% { background-position: 100% 50%; }
+  50% { background-position: 100% 100%; }
+  75% { background-position: 0% 100%; }
+  100% { background-position: 0% 50%; }
+}
+
+.screensaver-title {
+  font-size: 72px;
+  font-weight: 900;
+  letter-spacing: 8px;
+  background: linear-gradient(135deg, #646cff, #a78bfa, #818cf8, #646cff);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: screensaver-text 6s ease infinite;
+  text-transform: uppercase;
+  user-select: none;
+  position: relative;
+}
+
+@keyframes screensaver-text {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.screensaver-clock {
+  font-size: 22px;
+  font-family: 'monospace';
+  color: rgba(255, 255, 255, 0.35);
+  margin-top: 20px;
+  letter-spacing: 4px;
+}
+
+/* Orbs flutuantes de luz no fundo */
+.screensaver-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.15;
+  animation: screensaver-float 20s ease-in-out infinite;
+}
+
+.screensaver-orb:nth-child(1) {
+  width: 400px; height: 400px;
+  background: #646cff;
+  top: -100px; left: -100px;
+  animation-duration: 18s;
+}
+.screensaver-orb:nth-child(2) {
+  width: 350px; height: 350px;
+  background: #a78bfa;
+  bottom: -80px; right: -80px;
+  animation-duration: 22s;
+  animation-delay: -5s;
+}
+.screensaver-orb:nth-child(3) {
+  width: 300px; height: 300px;
+  background: #818cf8;
+  top: 50%; left: 60%;
+  animation-duration: 25s;
+  animation-delay: -10s;
+}
+
+@keyframes screensaver-float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(60px, -40px) scale(1.1); }
+  50% { transform: translate(-30px, 60px) scale(0.95); }
+  75% { transform: translate(-60px, -20px) scale(1.05); }
+}
+
+/* Pulse para badge de streaming */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
