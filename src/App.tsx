@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import { fetchTwitchVods, fetchYouTubeVideos, type VideoItem } from './services/api';
 
@@ -9,6 +9,29 @@ interface ScheduledProgram {
   durationMinutes: number;
   channelId: string;
 }
+
+
+interface OverlayLayer {
+  id: string;
+  type: 'text' | 'ticker' | 'clock';
+  enabled: boolean;
+  label: string;
+  text: string;
+  x: number;           // 0-100 % of canvas
+  y: number;           // 0-100 % of canvas
+  color: string;
+  fontSize: number;
+  bgEnabled: boolean;
+  bgFullWidth: boolean; // barra que ocupa 100% da largura
+  scrollSpeed: number;  // px/s no espaço 1920px
+  scrollDir: 'left' | 'right';
+}
+interface OverlayConfig {
+  enabled: boolean;
+  layers: OverlayLayer[];
+}
+const defaultOverlay: OverlayConfig = { enabled: false, layers: [] };
+
 
 function App() {
   const [activeTab, setActiveTab] = useState('schedule');
@@ -32,11 +55,47 @@ function App() {
   const [keysSaved, setKeysSaved] = useState(false);
   const [ytError, setYtError] = useState('');
 
+  // Overlay State
+  const [overlayConfig, setOverlayConfig] = useState<OverlayConfig>(defaultOverlay);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const previewRef = React.useRef<HTMLDivElement>(null);
+
+  const updateLayer = (id: string, updates: Partial<OverlayLayer>) =>
+    setOverlayConfig(prev => ({ ...prev, layers: prev.layers.map(l => l.id === id ? { ...l, ...updates } : l) }));
+
+  const addLayer = (type: OverlayLayer['type']) => {
+    const presets: Record<string, Partial<OverlayLayer>> = {
+      text:   { text: 'Meu Texto',            x: 5,  y: 5,  fontSize: 40, bgEnabled: true,  bgFullWidth: false, scrollSpeed: 150, scrollDir: 'left' },
+      ticker: { text: 'Mensagem em movimento...📡', x: 0,  y: 92, fontSize: 30, bgEnabled: true,  bgFullWidth: true,  scrollSpeed: 180, scrollDir: 'left' },
+      clock:  { text: '',                     x: 78, y: 4,  fontSize: 32, bgEnabled: true,  bgFullWidth: false, scrollSpeed: 150, scrollDir: 'left' },
+    };
+    const layer: OverlayLayer = {
+      id: Date.now().toString(), type, enabled: true,
+      label: type === 'ticker' ? 'Ticker →' : type === 'clock' ? 'Relógio' : 'Texto',
+      color: '#ffffff', ...presets[type]
+    } as OverlayLayer;
+    setOverlayConfig(prev => ({ ...prev, layers: [...prev.layers, layer] }));
+    setSelectedLayerId(layer.id);
+  };
+
+  const removeLayer = (id: string) => {
+    setOverlayConfig(prev => ({ ...prev, layers: prev.layers.filter(l => l.id !== id) }));
+    setSelectedLayerId(null);
+  };
+
+  const handlePreviewMouseMove = (e: React.MouseEvent) => {
+    if (!draggingId || !previewRef.current) return;
+    const rect = previewRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(99, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(99, ((e.clientY - rect.top) / rect.height) * 100));
+    updateLayer(draggingId, { x, y });
+  };
+
   // RTMP Streaming State
   const [rtmpUrl, setRtmpUrl] = useState('rtmp://a.rtmp.youtube.com/live2');
   const [streamKey, setStreamKey] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamError, setStreamError] = useState('');
 
   // Phase 4: Live Player State
   const [currentTimeTick, setCurrentTimeTick] = useState(new Date());
@@ -104,6 +163,14 @@ function App() {
           if (d.rtmpUrl) setRtmpUrl(d.rtmpUrl);
           if (d.streamKey) setStreamKey(d.streamKey);
           if (d.selectedChannelId) setSelectedChannelId(d.selectedChannelId);
+          if (d.overlayConfig) {
+            // Migração/segurança: previne crash se carregar formato antigo (sem .layers)
+            if (Array.isArray(d.overlayConfig.layers)) {
+              setOverlayConfig(d.overlayConfig);
+            } else {
+              setOverlayConfig({ enabled: false, layers: [] });
+            }
+          }
           if (d.localVideos && d.localVideos.length > 0) {
             setVideos(d.localVideos);
             setConnections(prev => ({ ...prev, local: true }));
@@ -135,22 +202,15 @@ function App() {
         const localVideos = videos.filter(v => v.platform === 'local');
 
         await ipcRenderer.invoke('save-data', {
-          scheduledPrograms,
-          channels,
-          twitchClientId,
-          youtubeClientId,
-          youtubeClientSecret,
-          rtmpUrl,
-          streamKey,
-          selectedChannelId,
-          localVideos,
+          scheduledPrograms, channels, twitchClientId, youtubeClientId,
+          youtubeClientSecret, rtmpUrl, streamKey, selectedChannelId, localVideos, overlayConfig,
         });
       } catch (e) {
         console.error('[StreamTV] Erro ao salvar:', e);
       }
     };
     saveData();
-  }, [scheduledPrograms, channels, twitchClientId, youtubeClientId, youtubeClientSecret, rtmpUrl, streamKey, videos]);
+  }, [scheduledPrograms, channels, twitchClientId, youtubeClientId, youtubeClientSecret, rtmpUrl, streamKey, videos, overlayConfig]);
 
   // Phase 4: Clock Tick for Live Player
   useEffect(() => {
@@ -350,16 +410,18 @@ function App() {
         if (!ipcRenderer) return;
 
         if (currentId && liveProgram) {
-          // Trocar para vídeo
           await ipcRenderer.invoke('switch-stream', {
             videoPath: liveProgram.video.id,
-            offsetSeconds
+            offsetSeconds,
+            overlayConfig,
+            programTitle: liveProgram.video.title,
           });
         } else {
-          // Trocar para screensaver
           await ipcRenderer.invoke('switch-stream', {
             videoPath: null,
-            offsetSeconds: 0
+            offsetSeconds: 0,
+            overlayConfig,
+            programTitle: '',
           });
         }
       } catch (e) {
@@ -386,6 +448,9 @@ function App() {
           <div className={`nav-item ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>
             🔴 Modo Transmissão
           </div>
+          <div className={`nav-item ${activeTab === 'overlay' ? 'active' : ''}`} onClick={() => setActiveTab('overlay')}>
+            🎨 Overlay
+          </div>
           <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
             ⚙️ Conexões / Login
           </div>
@@ -393,7 +458,7 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {activeTab !== 'live' && (
+        {activeTab !== 'live' && activeTab !== 'overlay' && (
           <header className="header">
             <h1>
               {activeTab === 'schedule' && 'Grade de Programação (TV Guide)'}
@@ -448,7 +513,177 @@ function App() {
           </div>
         )}
 
+        {/* Overlay Editor Tab */}
+        {activeTab === 'overlay' && (
+          <div style={{ display:'flex', flex:1, flexDirection:'column', overflow:'hidden' }}>
+
+            {/* Toolbar */}
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'12px 20px', backgroundColor:'var(--bg-secondary)', borderBottom:'1px solid var(--border-color)', flexShrink:0 }}>
+              <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', marginRight:'10px' }}>
+                <input type="checkbox" checked={overlayConfig.enabled}
+                  onChange={e => setOverlayConfig(p => ({ ...p, enabled: e.target.checked }))} />
+                <span style={{ fontWeight:'bold', color: overlayConfig.enabled ? '#4ade80' : 'var(--text-secondary)' }}>
+                  {overlayConfig.enabled ? '● Overlay Ativo' : '○ Overlay Inativo'}
+                </span>
+              </label>
+              <span style={{ color:'var(--text-secondary)', fontSize:'13px' }}>Adicionar camada:</span>
+              <button onClick={() => addLayer('text')}   style={{ background:'var(--accent-color)', color:'white', border:'none', padding:'6px 14px', borderRadius:'3px', cursor:'pointer', fontSize:'13px' }}>✏️ Texto</button>
+              <button onClick={() => addLayer('ticker')} style={{ background:'#7c3aed', color:'white', border:'none', padding:'6px 14px', borderRadius:'3px', cursor:'pointer', fontSize:'13px' }}>📡 Ticker</button>
+              <button onClick={() => addLayer('clock')}  style={{ background:'#0369a1', color:'white', border:'none', padding:'6px 14px', borderRadius:'3px', cursor:'pointer', fontSize:'13px' }}>🕐 Relógio</button>
+            </div>
+
+            <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+
+              {/* Preview Canvas */}
+              <div style={{ flex:1, padding:'20px', overflow:'auto', display:'flex', flexDirection:'column' }}>
+                <p style={{ color:'var(--text-secondary)', fontSize:'12px', marginBottom:'8px' }}>Arraste os elementos no preview para reposicionar. Os tickers rolam automaticamente na live.</p>
+                <div
+                  ref={previewRef}
+                  style={{ position:'relative', width:'100%', aspectRatio:'16/9', backgroundColor:'#080810', border:'1px solid var(--border-color)', overflow:'hidden', cursor: draggingId ? 'grabbing' : 'default', userSelect:'none' }}
+                  onMouseMove={handlePreviewMouseMove}
+                  onMouseUp={() => setDraggingId(null)}
+                  onMouseLeave={() => setDraggingId(null)}
+                >
+                  {/* Simulated background */}
+                  <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1 }}>
+                    <span style={{ fontSize:'64px' }}>📺</span>
+                  </div>
+
+                  {overlayConfig.enabled && (overlayConfig.layers || []).filter(l => l.enabled).map(layer => {
+                    const isSelected = selectedLayerId === layer.id;
+                    const fs = `clamp(9px, ${layer.fontSize / 16 * 1.4}vw, ${layer.fontSize * 0.7}px)`;
+                    const baseStyle: React.CSSProperties = {
+                      position: 'absolute',
+                      left: layer.bgFullWidth ? 0 : `${layer.x}%`,
+                      top: `${layer.y}%`,
+                      width: layer.bgFullWidth ? '100%' : undefined,
+                      color: layer.color,
+                      fontSize: fs,
+                      padding: layer.bgFullWidth ? `3px 10px 3px calc(${layer.x}% + 10px)` : '2px 6px',
+                      backgroundColor: layer.bgEnabled ? (layer.bgFullWidth ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.5)') : 'transparent',
+                      whiteSpace: layer.bgFullWidth ? 'nowrap' : 'nowrap',
+                      outline: isSelected ? '2px solid #646cff' : 'none',
+                      cursor: layer.type === 'ticker' ? 'default' : 'grab',
+                      boxSizing: 'border-box',
+                      fontFamily: layer.type === 'clock' ? 'monospace' : 'inherit',
+                      overflow: layer.bgFullWidth ? 'hidden' : undefined,
+                    };
+                    const content = layer.type === 'clock'
+                      ? currentTimeTick.toLocaleTimeString()
+                      : layer.type === 'ticker'
+                      ? <span style={{ display:'inline-block', animation:`ticker-scroll ${Math.max(5, 300/((layer.scrollSpeed||150)/100))}s linear infinite`, whiteSpace:'nowrap' }}>{layer.text}</span>
+                      : (layer.text || '(vazio)');
+                    return (
+                      <div
+                        key={layer.id}
+                        style={baseStyle}
+                        onMouseDown={e => { e.stopPropagation(); if (layer.type !== 'ticker') { setDraggingId(layer.id); } setSelectedLayerId(layer.id); }}
+                        onClick={() => setSelectedLayerId(layer.id)}
+                      >
+                        {content}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right Panel: Layer List + Editor */}
+              <div style={{ width:'340px', backgroundColor:'var(--bg-secondary)', borderLeft:'1px solid var(--border-color)', display:'flex', flexDirection:'column', flexShrink:0 }}>
+
+                {/* Layer List */}
+                <div style={{ borderBottom:'1px solid var(--border-color)', padding:'12px' }}>
+                  <p style={{ color:'var(--text-secondary)', fontSize:'11px', margin:'0 0 8px 0', textTransform:'uppercase', letterSpacing:'1px' }}>Camadas ({(overlayConfig.layers || []).length})</p>
+                  {(overlayConfig.layers || []).length === 0 && <p style={{ color:'var(--text-secondary)', fontSize:'12px', margin:0 }}>Nenhuma camada. Adicione uma acima.</p>}
+                  {(overlayConfig.layers || []).map((layer) => (
+                    <div
+                      key={layer.id}
+                      onClick={() => setSelectedLayerId(layer.id)}
+                      style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 8px', borderRadius:'3px', cursor:'pointer', marginBottom:'4px', backgroundColor: selectedLayerId === layer.id ? 'rgba(100,108,255,0.2)' : 'transparent', border: selectedLayerId === layer.id ? '1px solid rgba(100,108,255,0.5)' : '1px solid transparent' }}
+                    >
+                      <span style={{ fontSize:'16px' }}>{layer.type === 'ticker' ? '📡' : layer.type === 'clock' ? '🕐' : '✏️'}</span>
+                      <span style={{ flex:1, fontSize:'13px', color:'white' }}>{layer.label}</span>
+                      <input type="checkbox" checked={layer.enabled} onChange={e => { e.stopPropagation(); updateLayer(layer.id, { enabled: e.target.checked }); }} onClick={e => e.stopPropagation()} />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Selected Layer Editor */}
+                <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
+                  {!selectedLayerId && <p style={{ color:'var(--text-secondary)', fontSize:'13px' }}>Selecione uma camada para editar.</p>}
+                  {selectedLayerId && (() => {
+                    const layer = (overlayConfig.layers || []).find(l => l.id === selectedLayerId);
+                    if (!layer) return null;
+                    const inp: React.CSSProperties = { backgroundColor:'var(--bg-tertiary)', color:'white', border:'1px solid var(--border-color)', padding:'7px 9px', borderRadius:'3px', outline:'none', width:'100%', boxSizing:'border-box' as any };
+                    const lbl: React.CSSProperties = { fontSize:'11px', color:'var(--text-secondary)', display:'block', marginBottom:'4px', marginTop:'12px' };
+                    return (
+                      <div>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                            <span style={{ fontSize:'18px' }}>{layer.type === 'ticker' ? '📡' : layer.type === 'clock' ? '🕐' : '✏️'}</span>
+                            <input value={layer.label} onChange={e => updateLayer(layer.id, { label: e.target.value })} style={{ ...inp, width:'140px', fontWeight:'bold', fontSize:'14px' }} />
+                          </div>
+                          <button onClick={() => removeLayer(layer.id)} style={{ background:'rgba(220,38,38,0.3)', color:'#fca5a5', border:'1px solid rgba(220,38,38,0.5)', padding:'5px 10px', borderRadius:'3px', cursor:'pointer', fontSize:'12px' }}>🗑 Excluir</button>
+                        </div>
+
+                        {layer.type !== 'clock' && <>
+                          <span style={lbl}>Texto {layer.type === 'ticker' ? '(rola na live)' : ''}</span>
+                          <textarea value={layer.text} onChange={e => updateLayer(layer.id, { text: e.target.value })} rows={3} style={{ ...inp, resize:'vertical', fontFamily:'inherit' }} placeholder="Digite o texto aqui..." />
+                        </>}
+
+                        <span style={lbl}>Cor do texto</span>
+                        <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                          <input type="color" value={layer.color} onChange={e => updateLayer(layer.id, { color: e.target.value })} style={{ width:'50px', height:'34px', border:'1px solid var(--border-color)', borderRadius:'3px', cursor:'pointer', backgroundColor:'transparent' }} />
+                          <input value={layer.color} onChange={e => updateLayer(layer.id, { color: e.target.value })} style={{ ...inp, fontFamily:'monospace', flex:1 }} />
+                        </div>
+
+                        <span style={lbl}>Tamanho da fonte: {layer.fontSize}px</span>
+                        <input type="range" min={12} max={120} value={layer.fontSize} onChange={e => updateLayer(layer.id, { fontSize: Number(e.target.value) })} style={{ width:'100%' }} />
+
+                        {layer.type !== 'ticker' && <>
+                          <span style={lbl}>Posição X: {layer.x.toFixed(0)}%</span>
+                          <input type="range" min={0} max={99} value={layer.x} onChange={e => updateLayer(layer.id, { x: Number(e.target.value) })} style={{ width:'100%' }} />
+                        </>}
+
+                        <span style={lbl}>Posição Y: {layer.y.toFixed(0)}%</span>
+                        <input type="range" min={0} max={99} value={layer.y} onChange={e => updateLayer(layer.id, { y: Number(e.target.value) })} style={{ width:'100%' }} />
+
+                        <span style={lbl}>Fundo</span>
+                        <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer' }}>
+                          <input type="checkbox" checked={layer.bgEnabled} onChange={e => updateLayer(layer.id, { bgEnabled: e.target.checked })} />
+                          <span style={{ fontSize:'13px', color:'var(--text-secondary)' }}>Ativar fundo semi-transparente</span>
+                        </label>
+                        {layer.bgEnabled && (
+                          <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', marginTop:'8px' }}>
+                            <input type="checkbox" checked={layer.bgFullWidth} onChange={e => updateLayer(layer.id, { bgFullWidth: e.target.checked })} />
+                            <span style={{ fontSize:'13px', color:'var(--text-secondary)' }}>Barra de fundo 100% da largura</span>
+                          </label>
+                        )}
+
+                        {layer.type === 'ticker' && <>
+                          <span style={lbl}>Velocidade: {layer.scrollSpeed}px/s</span>
+                          <input type="range" min={50} max={800} value={layer.scrollSpeed} onChange={e => updateLayer(layer.id, { scrollSpeed: Number(e.target.value) })} style={{ width:'100%' }} />
+                          <span style={lbl}>Direção</span>
+                          <div style={{ display:'flex', gap:'8px' }}>
+                            {(['left','right'] as const).map(d => (
+                              <button key={d} onClick={() => updateLayer(layer.id, { scrollDir: d })}
+                                style={{ flex:1, padding:'7px', borderRadius:'3px', cursor:'pointer', border:'1px solid var(--border-color)', backgroundColor: layer.scrollDir === d ? 'var(--accent-color)' : 'var(--bg-tertiary)', color:'white', fontSize:'13px' }}>
+                                {d === 'left' ? '⬅ Da direita pra esquerda' : '➡ Da esquerda pra direita'}
+                              </button>
+                            ))}
+                          </div>
+                        </>}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'settings' && (
+
+
           <div className="schedule-container">
             <h2>Configuração de APIs</h2>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Insira seus Client IDs para habilitar a integração com Twitch e YouTube. Eles são usados apenas localmente.</p>
@@ -724,13 +959,13 @@ function App() {
                       const result = await ipcRenderer.invoke('start-stream', {
                         videoPath: liveProgram?.video?.id || null,
                         offsetSeconds: isLive ? offsetSeconds : 0,
-                        rtmpUrl,
-                        streamKey,
-                        mode: isLive ? 'video' : 'screensaver'
+                        rtmpUrl, streamKey,
+                        mode: isLive ? 'video' : 'screensaver',
+                        overlayConfig,
+                        programTitle: liveProgram?.video?.title || '',
                       });
                       if (result.success) {
                         setIsStreaming(true);
-                        setStreamError('');
                         lastLiveProgramId.current = liveProgram?.id || null;
                       } else {
                         alert('Erro: ' + result.error);

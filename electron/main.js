@@ -272,6 +272,7 @@ import { spawn } from 'child_process';
 let ffmpegProcess = null;
 let streamStatus = 'idle'; // idle | streaming | error
 let currentRtmpUrl = '';
+let currentOverlayConfig = null;
 
 const getFfmpegPath = () => {
   try {
@@ -320,29 +321,87 @@ const spawnFfmpeg = (args) => {
   });
 };
 
-const buildVideoArgs = (filePath, offsetSeconds, fullRtmpUrl) => [
-  '-re',
-  '-ss', String(Math.floor(offsetSeconds)),
-  '-i', filePath,
-  '-c:v', 'libx264', '-preset', 'veryfast',
-  '-maxrate', '3000k', '-bufsize', '6000k',
-  '-pix_fmt', 'yuv420p', '-g', '60',
-  '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
-  '-f', 'flv', fullRtmpUrl
-];
+// ==========================================
+// Overlay FFmpeg Filter Builder (layers system)
+// ==========================================
+const buildOverlayFilter = (overlayConfig, programTitle) => {
+  if (!overlayConfig || !overlayConfig.enabled) return null;
+  const layers = (overlayConfig.layers || []).filter(l => l.enabled);
+  if (layers.length === 0) return null;
 
-const buildScreensaverArgs = (fullRtmpUrl) => [
-  '-re',
-  '-f', 'lavfi', '-i',
-  'color=c=#1a1a2e:s=1920x1080:r=30,drawtext=text=StreamTV:fontsize=80:fontcolor=white@0.6:x=(w-text_w)/2:y=(h-text_h)/2',
-  '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
-  '-c:v', 'libx264', '-preset', 'veryfast',
-  '-maxrate', '2000k', '-bufsize', '4000k',
-  '-pix_fmt', 'yuv420p', '-g', '60',
-  '-c:a', 'aac', '-b:a', '128k',
-  '-t', '86400',  // Até 24h (será interrompido antes)
-  '-f', 'flv', fullRtmpUrl
-];
+  const esc  = (t) => (t || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:');
+  const ffCol = (hex) => `0x${(hex || '#ffffff').replace('#', '')}@1.0`;
+
+  const filters = [];
+
+  for (const layer of layers) {
+    const fs    = layer.fontSize || 28;
+    const color = ffCol(layer.color);
+    const pxY   = Math.round(((layer.y || 0) / 100) * 1080);
+
+    // Barra de fundo full-width (drawbox antes do drawtext)
+    if (layer.bgEnabled && layer.bgFullWidth) {
+      const barH = fs + 20;
+      const barY = Math.max(0, pxY - 8);
+      filters.push(`drawbox=x=0:y=${barY}:w=iw:h=${barH}:color=black@0.7:t=fill`);
+    }
+
+    if (layer.type === 'text') {
+      const pxX = Math.round(((layer.x || 0) / 100) * 1920);
+      let f = `drawtext=text='${esc(layer.text || '')}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=6';
+      filters.push(f);
+
+    } else if (layer.type === 'clock') {
+      const pxX = Math.round(((layer.x || 0) / 100) * 1920);
+      let f = `drawtext=text='%{localtime\\:%H\\:%M\\:%S}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=5';
+      filters.push(f);
+
+    } else if (layer.type === 'ticker') {
+      const speed = layer.scrollSpeed || 150;
+      // Rolagem: da direita para esquerda (padrão) ou esquerda para direita
+      const xExpr = layer.scrollDir === 'right'
+        ? `mod(t*${speed}\\,w+tw)-tw`          // aparece da esquerda
+        : `w-mod(t*${speed}\\,w+tw)`;           // aparece da direita
+      let f = `drawtext=text='${esc(layer.text || '')}':fontsize=${fs}:fontcolor=${color}:x=${xExpr}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=5';
+      filters.push(f);
+    }
+  }
+
+  return filters.length > 0 ? filters.join(',') : null;
+};
+
+
+const buildVideoArgs = (filePath, offsetSeconds, fullRtmpUrl, vfFilter) => {
+  const args = [
+    '-re',
+    '-ss', String(Math.floor(offsetSeconds)),
+    '-i', filePath,
+    '-c:v', 'libx264', '-preset', 'veryfast',
+    '-maxrate', '3000k', '-bufsize', '6000k',
+    '-pix_fmt', 'yuv420p', '-g', '60',
+  ];
+  if (vfFilter) args.push('-vf', vfFilter);
+  args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-f', 'flv', fullRtmpUrl);
+  return args;
+};
+
+const buildScreensaverArgs = (fullRtmpUrl, vfFilter) => {
+  const args = [
+    '-re',
+    '-f', 'lavfi', '-i',
+    'color=c=#1a1a2e:s=1920x1080:r=30,drawtext=text=StreamTV:fontsize=80:fontcolor=white@0.6:x=(w-text_w)/2:y=(h-text_h)/2',
+    '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
+    '-c:v', 'libx264', '-preset', 'veryfast',
+    '-maxrate', '2000k', '-bufsize', '4000k',
+    '-pix_fmt', 'yuv420p', '-g', '60',
+  ];
+  if (vfFilter) args.push('-vf', vfFilter);
+  args.push('-c:a', 'aac', '-b:a', '128k', '-t', '86400', '-f', 'flv', fullRtmpUrl);
+  return args;
+};
 
 const resolveFilePath = (videoPath) => {
   let filePath = videoPath;
@@ -356,20 +415,23 @@ const resolveFilePath = (videoPath) => {
 };
 
 // Iniciar stream (vídeo ou screensaver)
-ipcMain.handle('start-stream', async (_event, { videoPath, offsetSeconds, rtmpUrl, streamKey, mode }) => {
+ipcMain.handle('start-stream', async (_event, { videoPath, offsetSeconds, rtmpUrl, streamKey, mode, overlayConfig, programTitle }) => {
   if (ffmpegProcess) {
     return { success: false, error: 'Já existe uma transmissão ativa.' };
   }
 
   const fullRtmpUrl = `${rtmpUrl}/${streamKey}`;
   currentRtmpUrl = fullRtmpUrl;
+  currentOverlayConfig = overlayConfig || null;
+
+  const vfFilter = buildOverlayFilter(overlayConfig, programTitle);
 
   let args;
   if (mode === 'screensaver' || !videoPath) {
-    args = buildScreensaverArgs(fullRtmpUrl);
+    args = buildScreensaverArgs(fullRtmpUrl, vfFilter);
   } else {
     const filePath = resolveFilePath(videoPath);
-    args = buildVideoArgs(filePath, offsetSeconds, fullRtmpUrl);
+    args = buildVideoArgs(filePath, offsetSeconds, fullRtmpUrl, vfFilter);
   }
 
   try {
@@ -382,22 +444,23 @@ ipcMain.handle('start-stream', async (_event, { videoPath, offsetSeconds, rtmpUr
 });
 
 // Trocar fonte do stream sem parar (vídeo <-> screensaver)
-ipcMain.handle('switch-stream', async (_event, { videoPath, offsetSeconds }) => {
+ipcMain.handle('switch-stream', async (_event, { videoPath, offsetSeconds, overlayConfig, programTitle }) => {
   if (!currentRtmpUrl) {
     return { success: false, error: 'Nenhuma URL RTMP configurada.' };
   }
 
   await killFfmpeg();
-
-  // Pequena pausa para o servidor RTMP liberar a conexão
   await new Promise(r => setTimeout(r, 500));
+
+  const activeOverlay = overlayConfig || currentOverlayConfig;
+  const vfFilter = buildOverlayFilter(activeOverlay, programTitle);
 
   let args;
   if (!videoPath) {
-    args = buildScreensaverArgs(currentRtmpUrl);
+    args = buildScreensaverArgs(currentRtmpUrl, vfFilter);
   } else {
     const filePath = resolveFilePath(videoPath);
-    args = buildVideoArgs(filePath, offsetSeconds, currentRtmpUrl);
+    args = buildVideoArgs(filePath, offsetSeconds, currentRtmpUrl, vfFilter);
   }
 
   try {
