@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
-import { fetchTwitchVods, fetchYouTubeVideos, type VideoItem } from './services/api';
+import { fetchTwitchVods, fetchYouTubeVideos, updateYouTubeLiveTitle, type VideoItem } from './services/api';
 
 interface ScheduledProgram {
   id: string;
@@ -100,6 +100,12 @@ function App() {
   // Phase 4: Live Player State
   const [currentTimeTick, setCurrentTimeTick] = useState(new Date());
 
+  // Novo modo de grade
+  const [scheduleMode, setScheduleMode] = useState<'fixed' | 'playlist'>('fixed');
+  
+  // Título da live (opcional) para iniciar stream
+  const [liveTitle, setLiveTitle] = useState('');
+
   const times = ['14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00'];
 
   // Helper to parse "HH:MM:SS" or "MM:SS" into minutes
@@ -171,6 +177,7 @@ function App() {
               setOverlayConfig({ enabled: false, layers: [] });
             }
           }
+          if (d.scheduleMode) setScheduleMode(d.scheduleMode);
           if (d.localVideos && d.localVideos.length > 0) {
             setVideos(d.localVideos);
             setConnections(prev => ({ ...prev, local: true }));
@@ -203,14 +210,14 @@ function App() {
 
         await ipcRenderer.invoke('save-data', {
           scheduledPrograms, channels, twitchClientId, youtubeClientId,
-          youtubeClientSecret, rtmpUrl, streamKey, selectedChannelId, localVideos, overlayConfig,
+          youtubeClientSecret, rtmpUrl, streamKey, selectedChannelId, localVideos, overlayConfig, scheduleMode
         });
       } catch (e) {
         console.error('[StreamTV] Erro ao salvar:', e);
       }
     };
     saveData();
-  }, [scheduledPrograms, channels, twitchClientId, youtubeClientId, youtubeClientSecret, rtmpUrl, streamKey, videos, overlayConfig]);
+  }, [scheduledPrograms, channels, twitchClientId, youtubeClientId, youtubeClientSecret, rtmpUrl, streamKey, videos, overlayConfig, scheduleMode]);
 
   // Phase 4: Clock Tick for Live Player
   useEffect(() => {
@@ -307,12 +314,15 @@ function App() {
   };
 
   const handleAddProgram = () => {
+    if (!selectedChannelId) return alert("Crie um Programa / Fileira primeiro!");
     const video = videos.find(v => v.id === selectedVideoId);
     if (!video) return alert("Selecione um vídeo!");
     
-    const exists = scheduledPrograms.find(p => p.startTime === selectedTime && p.channelId === selectedChannelId);
-    if (exists) {
-      return alert("Já existe um vídeo agendado para este horário exato neste programa!");
+    if (scheduleMode === 'fixed') {
+      const exists = scheduledPrograms.find(p => p.startTime === selectedTime && p.channelId === selectedChannelId);
+      if (exists) {
+        return alert("Já existe um vídeo agendado para este horário exato neste programa!");
+      }
     }
 
     const duration = Math.round(parseDuration(video.duration));
@@ -320,12 +330,16 @@ function App() {
     const newProgram: ScheduledProgram = {
       id: Date.now().toString(),
       video,
-      startTime: selectedTime,
+      startTime: scheduleMode === 'playlist' ? Date.now().toString() : selectedTime,
       durationMinutes: duration,
       channelId: selectedChannelId
     };
 
     setScheduledPrograms(prev => [...prev, newProgram].sort((a, b) => a.startTime.localeCompare(b.startTime)));
+  };
+
+  const handleRemoveProgram = (programId: string) => {
+    setScheduledPrograms(prev => prev.filter(p => p.id !== programId));
   };
 
   const handleAddChannel = () => {
@@ -337,6 +351,15 @@ function App() {
   };
 
   const getBlockStyle = (program: ScheduledProgram) => {
+    if (scheduleMode === 'playlist') {
+      return {
+        position: 'relative' as const,
+        height: '60px',
+        width: `${Math.max(120, (program.durationMinutes / 60) * 150)}px`,
+        flexShrink: 0
+      };
+    }
+
     const startParts = program.startTime.split(':').map(Number);
     const baseHour = 14; 
     const offsetMinutes = (startParts[0] - baseHour) * 60 + startParts[1];
@@ -346,7 +369,7 @@ function App() {
       width: `${(program.durationMinutes / 60) * 150}px`,
       position: 'absolute' as const,
       height: '60px',
-      top: '10px'
+      top: '20px'
     };
   };
 
@@ -358,6 +381,33 @@ function App() {
     
     const currentTotalSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond;
 
+    if (scheduleMode === 'playlist') {
+      // No modo playlist, roda continuamente os vídeos da fileira atual em loop contínuo
+      const channelPrograms = scheduledPrograms.filter(p => p.channelId === selectedChannelId);
+      if (channelPrograms.length === 0) return { program: null, offsetSeconds: 0, isLive: false };
+
+      const totalLoopSeconds = channelPrograms.reduce((acc, p) => acc + p.durationMinutes * 60, 0);
+      if (totalLoopSeconds === 0) return { program: null, offsetSeconds: 0, isLive: false };
+
+      // Onde estamos no loop atual (usando os segundos totais do dia como base de tempo universal)
+      const loopCurrentSeconds = currentTotalSeconds % totalLoopSeconds;
+      
+      let accumulated = 0;
+      for (const p of channelPrograms) {
+        const pDurationSeconds = p.durationMinutes * 60;
+        if (loopCurrentSeconds >= accumulated && loopCurrentSeconds < accumulated + pDurationSeconds) {
+          return {
+            program: p,
+            offsetSeconds: loopCurrentSeconds - accumulated,
+            isLive: true
+          };
+        }
+        accumulated += pDurationSeconds;
+      }
+      return { program: null, offsetSeconds: 0, isLive: false };
+    }
+
+    // Modo Fixo (Grade baseada no horário)
     for (const p of scheduledPrograms) {
       const pParts = p.startTime.split(':').map(Number);
       const pStartSeconds = pParts[0] * 3600 + pParts[1] * 60;
@@ -455,6 +505,74 @@ function App() {
             ⚙️ Conexões / Login
           </div>
         </nav>
+
+        <div style={{ marginTop: 'auto', padding: '20px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {!isStreaming ? (
+            <>
+              <input 
+                type="text"
+                value={liveTitle}
+                onChange={(e) => setLiveTitle(e.target.value)}
+                placeholder={liveProgram?.video?.title ? `Ex: ${liveProgram.video.title}` : "Digite o título da Live"}
+                style={{ backgroundColor: 'rgba(0,0,0,0.5)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '4px', outline: 'none', width: '100%', fontSize: '12px' }}
+              />
+              <button
+                onClick={async () => {
+                  if (!streamKey) return alert('Configure a Stream Key na aba Conexões antes de iniciar.');
+                  
+                  const finalTitle = liveTitle.trim() || liveProgram?.video?.title || 'StreamTV Live';
+
+                  // Atualiza no YouTube se estiver conectado
+                  if (connections.youtube) {
+                    const ytUpdated = await updateYouTubeLiveTitle(connections.youtube as string, finalTitle);
+                    if (ytUpdated) console.log('[StreamTV] Título da Live atualizado no YouTube!');
+                  }
+
+                  try {
+                    // @ts-ignore
+                    const ipcRenderer = window.require('electron').ipcRenderer;
+                    const result = await ipcRenderer.invoke('start-stream', {
+                      videoPath: liveProgram?.video?.id || null,
+                      offsetSeconds: isLive ? offsetSeconds : 0,
+                      rtmpUrl, streamKey,
+                      mode: isLive ? 'video' : 'screensaver',
+                      overlayConfig,
+                      programTitle: finalTitle, // Usa o nome digitado
+                    });
+                    if (result.success) {
+                      setIsStreaming(true);
+                      lastLiveProgramId.current = liveProgram?.id || null;
+                    } else {
+                      alert('Erro: ' + result.error);
+                    }
+                  } catch (e) { alert('Erro ao iniciar stream: ' + e); }
+                }}
+                style={{ backgroundColor: '#dc2626', color: 'white', border: 'none', padding: '10px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%', borderRadius: '4px' }}
+              >
+                📡 Iniciar Stream
+              </button>
+            </>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ backgroundColor: 'rgba(100, 108, 255, 0.2)', color: '#818cf8', padding: '8px', borderRadius: '4px', fontSize: '12px', textAlign: 'center', fontWeight: 'bold', border: '1px solid rgba(100, 108, 255, 0.5)' }}>
+                📡 TRANSMITINDO
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    // @ts-ignore
+                    const ipcRenderer = window.require('electron').ipcRenderer;
+                    await ipcRenderer.invoke('stop-stream');
+                    setIsStreaming(false);
+                  } catch (e) { alert('Erro ao parar: ' + e); }
+                }}
+                style={{ backgroundColor: 'var(--bg-secondary)', color: '#ef4444', border: '1px solid #ef4444', padding: '10px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%', borderRadius: '4px' }}
+              >
+                ■ Parar Stream
+              </button>
+            </div>
+          )}
+        </div>
       </aside>
 
       <main className="main-content">
@@ -571,7 +689,13 @@ function App() {
                     const content = layer.type === 'clock'
                       ? currentTimeTick.toLocaleTimeString()
                       : layer.type === 'ticker'
-                      ? <span style={{ display:'inline-block', animation:`ticker-scroll ${Math.max(5, 300/((layer.scrollSpeed||150)/100))}s linear infinite`, whiteSpace:'nowrap' }}>{layer.text}</span>
+                      ? (() => {
+                          const speed = layer.scrollSpeed || 150;
+                          const textStr = layer.text || '';
+                          const approxTextWidth = textStr.length * (layer.fontSize * 0.6);
+                          const duration = Math.max(2, (1920 + approxTextWidth) / speed);
+                          return <span style={{ display:'inline-block', animation:`ticker-scroll ${duration}s linear infinite`, whiteSpace:'nowrap' }}>{textStr}</span>;
+                        })()
                       : (layer.text || '(vazio)');
                     return (
                       <div
@@ -824,54 +948,101 @@ function App() {
         {activeTab === 'schedule' && (
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
             <div className="schedule-container" style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
-              <p>Monte a grade selecionando os vídeos no painel lateral.</p>
               
-              <div className="timeline">
-                <div style={{ display: 'flex' }}>
-                  <div style={{ width: '150px', flexShrink: 0, backgroundColor: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}></div>
-                  <div className="time-header" style={{ flex: 1, borderBottom: '1px solid var(--border-color)' }}>
-                    {times.map(time => (
-                      <div key={time} className="time-slot" style={{ minWidth: '150px', flexShrink: 0, padding: '10px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>{time}</div>
-                    ))}
-                  </div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
+                <p style={{ margin:0, color:'var(--text-secondary)' }}>Monte a grade selecionando os vídeos no painel lateral.</p>
+                <div style={{ display:'flex', gap:'10px', backgroundColor:'var(--bg-secondary)', padding:'4px', borderRadius:'4px', border:'1px solid var(--border-color)' }}>
+                  <button onClick={() => setScheduleMode('fixed')} style={{ background: scheduleMode === 'fixed' ? 'var(--accent-color)' : 'transparent', border:'none', padding:'6px 12px', borderRadius:'2px', color:'white', cursor:'pointer', fontSize:'13px', fontWeight:'bold' }}>⏰ Horários Fixos</button>
+                  <button onClick={() => setScheduleMode('playlist')} style={{ background: scheduleMode === 'playlist' ? 'var(--accent-color)' : 'transparent', border:'none', padding:'6px 12px', borderRadius:'2px', color:'white', cursor:'pointer', fontSize:'13px', fontWeight:'bold' }}>🔁 Playlist Contínua</button>
                 </div>
-                
-                {channels.map(channel => (
-                  <div key={channel.id} style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
-                    <div style={{ 
-                      width: '150px', 
-                      flexShrink: 0, 
-                      backgroundColor: 'var(--bg-secondary)', 
-                      borderRight: '1px solid var(--border-color)', 
-                      padding: '20px 10px', 
-                      display: 'flex',
-                      alignItems: 'center',
-                      fontWeight: 'bold',
-                      color: 'white',
-                      position: 'sticky',
-                      left: 0,
-                      zIndex: 5
-                    }}>
-                      {channel.name}
+              </div>
+              
+              {scheduleMode === 'fixed' ? (
+                <div className="timeline">
+                  <div style={{ display: 'flex' }}>
+                    <div style={{ width: '150px', flexShrink: 0, backgroundColor: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}></div>
+                    <div className="time-header" style={{ flex: 1, borderBottom: '1px solid var(--border-color)' }}>
+                      {times.map(time => (
+                        <div key={time} className="time-slot" style={{ minWidth: '150px', flexShrink: 0, padding: '10px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>{time}</div>
+                      ))}
                     </div>
-                    <div className="channels-area" style={{ position: 'relative', height: '100px', flex: 1 }}>
-                      <div className="channel-row" style={{ position: 'relative', width: '100%', height: '100%' }}>
-                        {scheduledPrograms.filter(p => p.channelId === channel.id).length === 0 && <p style={{ padding: '20px', color: 'var(--text-secondary)' }}>Nenhum vídeo.</p>}
-                        {scheduledPrograms.filter(p => p.channelId === channel.id).map(program => (
-                          <div 
-                            key={program.id} 
-                            className="program-block"
-                            style={{ ...getBlockStyle(program), top: '20px', height: '60px' }}
-                          >
-                            <div className="program-title">{program.video.title}</div>
-                            <div className="program-time">{program.startTime} ({program.durationMinutes} min)</div>
+                  </div>
+                  
+                  {channels.map(channel => (
+                    <div key={channel.id} style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
+                      <div style={{ 
+                        width: '150px', 
+                        flexShrink: 0, 
+                        backgroundColor: 'var(--bg-secondary)', 
+                        borderRight: '1px solid var(--border-color)', 
+                        padding: '20px 10px', 
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontWeight: 'bold',
+                        color: 'white',
+                        position: 'sticky',
+                        left: 0,
+                        zIndex: 5
+                      }}>
+                        {channel.name}
+                      </div>
+                      <div className="channels-area" style={{ position: 'relative', height: '100px', flex: 1 }}>
+                        <div className="channel-row" style={{ position: 'relative', width: '100%', height: '100%' }}>
+                          {scheduledPrograms.filter(p => p.channelId === channel.id).length === 0 && <p style={{ padding: '20px', color: 'var(--text-secondary)' }}>Nenhum vídeo.</p>}
+                          {scheduledPrograms.filter(p => p.channelId === channel.id).map(program => (
+                            <div 
+                              key={program.id} 
+                              className="program-block"
+                              style={{ ...getBlockStyle(program) }}
+                            >
+                              <div className="program-title">{program.video.title}</div>
+                              <div className="program-time">{program.startTime} ({program.durationMinutes} min)</div>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleRemoveProgram(program.id); }}
+                                style={{ position: 'absolute', top: '2px', right: '4px', background: 'transparent', border: 'none', color: '#ef4444', fontSize: '10px', cursor: 'pointer' }}
+                              >
+                                ✖
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="playlists-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  {channels.map(channel => (
+                    <div key={channel.id} style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ padding: '15px 20px', backgroundColor: 'rgba(0,0,0,0.2)', borderBottom: '1px solid var(--border-color)', fontWeight: 'bold', fontSize: '16px' }}>
+                        {channel.name}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {scheduledPrograms.filter(p => p.channelId === channel.id).length === 0 && (
+                          <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize:'14px' }}>Nenhum vídeo nesta playlist. Adicione vídeos pelo painel lateral.</div>
+                        )}
+                        {scheduledPrograms.filter(p => p.channelId === channel.id).map((program, index) => (
+                          <div key={program.id} style={{ display: 'flex', alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid var(--border-color)', gap: '15px', backgroundColor: 'var(--bg-tertiary)' }}>
+                            <div style={{ color: 'var(--text-secondary)', fontWeight: 'bold', width: '20px', fontSize:'14px' }}>{index + 1}</div>
+                            <div style={{ width: '80px', aspectRatio: '16/9', backgroundImage: `url(${program.video.thumbnail})`, backgroundSize: 'cover', backgroundPosition: 'center', borderRadius: '4px' }}></div>
+                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                              <div style={{ fontWeight: 'bold', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{program.video.title}</div>
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{program.durationMinutes} minutos • {program.video.platform}</div>
+                            </div>
+                            <button 
+                              onClick={() => handleRemoveProgram(program.id)}
+                              style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: '20px', cursor: 'pointer', padding: '5px 10px', transition: '0.2s' }}
+                              title="Remover vídeo"
+                            >
+                              ✖
+                            </button>
                           </div>
                         ))}
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div style={{ width: '320px', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', padding: '30px', overflowY: 'auto', flexShrink: 0 }}>
@@ -905,35 +1076,39 @@ function App() {
                     <option key={v.id} value={v.id}>{v.title} ({v.duration})</option>
                   ))}
                 </select>
-
-                <label style={{ marginTop: '15px' }}>Horário de Início:</label>
-                <input 
-                  type="time" 
-                  value={selectedTime} 
-                  onChange={(e) => setSelectedTime(e.target.value)}
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none' }}
-                />
                 
-                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' }}>
-                  {times.map(t => (
-                    <button 
-                      key={t} 
-                      onClick={() => setSelectedTime(t)}
-                      style={{ 
-                        backgroundColor: selectedTime === t ? 'var(--accent-color)' : 'var(--bg-tertiary)', 
-                        color: 'white', 
-                        border: '1px solid var(--border-color)', 
-                        padding: '4px 8px', 
-                        borderRadius: '2px', 
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        transition: '0.2s'
-                      }}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                {scheduleMode === 'fixed' && (
+                  <>
+                    <label style={{ marginTop: '15px' }}>Horário de Início:</label>
+                    <input 
+                      type="time" 
+                      value={selectedTime} 
+                      onChange={(e) => setSelectedTime(e.target.value)}
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none' }}
+                    />
+                    
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' }}>
+                      {times.map(t => (
+                        <button 
+                          key={t} 
+                          onClick={() => setSelectedTime(t)}
+                          style={{
+                            backgroundColor: selectedTime === t ? 'var(--accent-color)' : 'var(--bg-tertiary)',
+                            color: 'white',
+                            border: '1px solid var(--border-color)',
+                            padding: '4px 8px',
+                            borderRadius: '2px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            transition: '0.2s'
+                          }}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
 
                 <button className="btn-connect" style={{ marginTop: '20px', backgroundColor: 'var(--accent-color)' }} onClick={handleAddProgram}>
                   + Agendar Vídeo
@@ -946,66 +1121,6 @@ function App() {
         {/* Phase 4: Live Transmissão Tab */}
         {activeTab === 'live' && (
           <div style={{ flex: 1, backgroundColor: '#000', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-            
-            {/* RTMP Controls - sempre visíveis */}
-            <div style={{ position: 'absolute', top: '30px', right: '30px', zIndex: 10 }}>
-              {!isStreaming ? (
-                <button
-                  onClick={async () => {
-                    if (!streamKey) return alert('Configure a Stream Key na aba Conexões antes de iniciar.');
-                    try {
-                      // @ts-ignore
-                      const ipcRenderer = window.require('electron').ipcRenderer;
-                      const result = await ipcRenderer.invoke('start-stream', {
-                        videoPath: liveProgram?.video?.id || null,
-                        offsetSeconds: isLive ? offsetSeconds : 0,
-                        rtmpUrl, streamKey,
-                        mode: isLive ? 'video' : 'screensaver',
-                        overlayConfig,
-                        programTitle: liveProgram?.video?.title || '',
-                      });
-                      if (result.success) {
-                        setIsStreaming(true);
-                        lastLiveProgramId.current = liveProgram?.id || null;
-                      } else {
-                        alert('Erro: ' + result.error);
-                      }
-                    } catch (e) { alert('Erro ao iniciar stream: ' + e); }
-                  }}
-                  style={{ backgroundColor: '#dc2626', color: 'white', border: 'none', padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                >
-                  📡 Iniciar Stream
-                </button>
-              ) : (
-                <button
-                  onClick={async () => {
-                    try {
-                      // @ts-ignore
-                      const ipcRenderer = window.require('electron').ipcRenderer;
-                      await ipcRenderer.invoke('stop-stream');
-                      setIsStreaming(false);
-                    } catch (e) { alert('Erro ao parar: ' + e); }
-                  }}
-                  style={{ backgroundColor: '#333', color: '#ef4444', border: '2px solid #ef4444', padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                >
-                  ■ Parar Stream
-                </button>
-              )}
-            </div>
-
-            {/* Badges */}
-            <div style={{ position: 'absolute', top: '30px', left: '30px', display: 'flex', gap: '10px', zIndex: 10 }}>
-              {isLive && (
-                <div style={{ backgroundColor: 'rgba(220, 38, 38, 0.9)', color: 'white', padding: '8px 16px', borderRadius: '4px', fontWeight: 'bold', fontSize: '18px', letterSpacing: '1px' }}>
-                  🔴 AO VIVO
-                </div>
-              )}
-              {isStreaming && (
-                <div style={{ backgroundColor: 'rgba(100, 108, 255, 0.9)', color: 'white', padding: '8px 16px', borderRadius: '4px', fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', animation: 'pulse 2s infinite' }}>
-                  📡 STREAMING RTMP
-                </div>
-              )}
-            </div>
 
             {isLive && liveProgram ? (
               <>
@@ -1016,6 +1131,48 @@ function App() {
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   src={liveProgram.video.platform === 'local' ? liveProgram.video.id : "https://www.w3schools.com/html/mov_bbb.mp4"}
                 />
+
+                {/* Visualização do Overlay sobre o Vídeo Ao Vivo (Preview WYSIWYG) */}
+                {overlayConfig.enabled && (
+                  <div style={{ position: 'absolute', inset: 0, margin: 'auto', width: '100%', height: '100%', maxWidth: '177.78vh', maxHeight: '56.25vw', pointerEvents: 'none', overflow: 'hidden', zIndex: 20 }}>
+                    {(overlayConfig.layers || []).filter(l => l.enabled).map(layer => {
+                      const fs = `clamp(9px, ${layer.fontSize / 16 * 1.4}vw, ${layer.fontSize * 0.7}px)`;
+                      let rawText = layer.text || '';
+                      rawText = rawText.replace(/\{titulo\}/gi, liveTitle || liveProgram?.video?.title || '');
+                      rawText = rawText.replace(/\{title\}/gi, liveTitle || liveProgram?.video?.title || '');
+
+                      const baseStyle: React.CSSProperties = {
+                        position: 'absolute',
+                        left: layer.bgFullWidth ? 0 : `${layer.x}%`,
+                        top: `${layer.y}%`,
+                        width: layer.bgFullWidth ? '100%' : undefined,
+                        color: layer.color,
+                        fontSize: fs,
+                        padding: layer.bgFullWidth ? `3px 10px 3px calc(${layer.x}% + 10px)` : '2px 6px',
+                        backgroundColor: layer.bgEnabled ? (layer.bgFullWidth ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.5)') : 'transparent',
+                        whiteSpace: layer.bgFullWidth ? 'nowrap' : 'nowrap',
+                        boxSizing: 'border-box',
+                        fontFamily: layer.type === 'clock' ? 'monospace' : 'inherit',
+                        overflow: layer.bgFullWidth ? 'hidden' : undefined,
+                      };
+                      const content = layer.type === 'clock'
+                        ? currentTimeTick.toLocaleTimeString()
+                        : layer.type === 'ticker'
+                        ? (() => {
+                            const speed = layer.scrollSpeed || 150;
+                            const approxTextWidth = rawText.length * (layer.fontSize * 0.6);
+                            const duration = Math.max(2, (1920 + approxTextWidth) / speed);
+                            return <span style={{ display:'inline-block', animation:`ticker-scroll ${duration}s linear infinite`, whiteSpace:'nowrap' }}>{rawText}</span>;
+                          })()
+                        : (rawText || '');
+                      return (
+                        <div key={layer.id} style={baseStyle}>
+                          {content}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 
                 <div style={{ position: 'absolute', bottom: '0', width: '100%', padding: '40px 40px 30px', background: 'linear-gradient(transparent, rgba(0,0,0,0.95))', zIndex: 10 }}>
                   <h2 style={{ margin: '0 0 15px 0', color: 'white', fontSize: '28px' }}>{liveProgram.video.title}</h2>

@@ -171,7 +171,7 @@ ipcMain.handle('login-youtube', async () => {
         `client_id=${YOUTUBE_CLIENT_ID}` +
         `&redirect_uri=${encodeURIComponent(YOUTUBE_REDIRECT_URI)}` +
         `&response_type=code` +
-        `&scope=${encodeURIComponent('https://www.googleapis.com/auth/youtube.readonly')}` +
+        `&scope=${encodeURIComponent('https://www.googleapis.com/auth/youtube')}` +
         `&access_type=offline` +
         `&prompt=consent`;
 
@@ -329,8 +329,11 @@ const buildOverlayFilter = (overlayConfig, programTitle) => {
   const layers = (overlayConfig.layers || []).filter(l => l.enabled);
   if (layers.length === 0) return null;
 
-  const esc  = (t) => (t || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:');
+  const esc  = (t) => (t || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/,/g, '\\,');
   const ffCol = (hex) => `0x${(hex || '#ffffff').replace('#', '')}@1.0`;
+
+  // FFmpeg no Windows exige especificar o arquivo de fonte nativa para o drawtext não crachar.
+  const fontArg = process.platform === 'win32' ? "fontfile=C\\\\:/Windows/Fonts/arial.ttf:" : "";
 
   const filters = [];
 
@@ -338,6 +341,14 @@ const buildOverlayFilter = (overlayConfig, programTitle) => {
     const fs    = layer.fontSize || 28;
     const color = ffCol(layer.color);
     const pxY   = Math.round(((layer.y || 0) / 100) * 1080);
+
+    // Substitui variáveis mágicas no texto
+    let rawText = layer.text || '';
+    rawText = rawText.replace(/\{titulo\}/gi, programTitle || '');
+    rawText = rawText.replace(/\{title\}/gi, programTitle || '');
+
+    // Ignora camadas de texto vazias (FFmpeg cracha se text='')
+    if (layer.type !== 'clock' && !rawText.trim()) continue;
 
     // Barra de fundo full-width (drawbox antes do drawtext)
     if (layer.bgEnabled && layer.bgFullWidth) {
@@ -348,14 +359,14 @@ const buildOverlayFilter = (overlayConfig, programTitle) => {
 
     if (layer.type === 'text') {
       const pxX = Math.round(((layer.x || 0) / 100) * 1920);
-      let f = `drawtext=text='${esc(layer.text || '')}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
-      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=6';
+      let f = `drawtext=${fontArg}text='${esc(rawText)}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5';
       filters.push(f);
 
     } else if (layer.type === 'clock') {
       const pxX = Math.round(((layer.x || 0) / 100) * 1920);
-      let f = `drawtext=text='%{localtime\\:%H\\:%M\\:%S}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
-      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=5';
+      let f = `drawtext=${fontArg}text='%{localtime\\:%H\\:%M\\:%S}':fontsize=${fs}:fontcolor=${color}:x=${pxX}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5';
       filters.push(f);
 
     } else if (layer.type === 'ticker') {
@@ -364,8 +375,8 @@ const buildOverlayFilter = (overlayConfig, programTitle) => {
       const xExpr = layer.scrollDir === 'right'
         ? `mod(t*${speed}\\,w+tw)-tw`          // aparece da esquerda
         : `w-mod(t*${speed}\\,w+tw)`;           // aparece da direita
-      let f = `drawtext=text='${esc(layer.text || '')}':fontsize=${fs}:fontcolor=${color}:x=${xExpr}:y=${pxY}`;
-      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5:boxborderw=5';
+      let f = `drawtext=${fontArg}text='${esc(rawText)}':fontsize=${fs}:fontcolor=${color}:x=${xExpr}:y=${pxY}`;
+      if (layer.bgEnabled && !layer.bgFullWidth) f += ':box=1:boxcolor=black@0.5';
       filters.push(f);
     }
   }
@@ -381,10 +392,10 @@ const buildVideoArgs = (filePath, offsetSeconds, fullRtmpUrl, vfFilter) => {
     '-i', filePath,
     '-c:v', 'libx264', '-preset', 'veryfast',
     '-maxrate', '3000k', '-bufsize', '6000k',
-    '-pix_fmt', 'yuv420p', '-g', '60',
+    '-pix_fmt', 'yuv420p', '-g', '60', '-r', '30'
   ];
   if (vfFilter) args.push('-vf', vfFilter);
-  args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-f', 'flv', fullRtmpUrl);
+  args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-flvflags', 'no_duration_filesize', '-f', 'flv', fullRtmpUrl);
   return args;
 };
 
@@ -396,10 +407,10 @@ const buildScreensaverArgs = (fullRtmpUrl, vfFilter) => {
     '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
     '-c:v', 'libx264', '-preset', 'veryfast',
     '-maxrate', '2000k', '-bufsize', '4000k',
-    '-pix_fmt', 'yuv420p', '-g', '60',
+    '-pix_fmt', 'yuv420p', '-g', '60', '-r', '30'
   ];
   if (vfFilter) args.push('-vf', vfFilter);
-  args.push('-c:a', 'aac', '-b:a', '128k', '-t', '86400', '-f', 'flv', fullRtmpUrl);
+  args.push('-c:a', 'aac', '-b:a', '128k', '-t', '86400', '-flvflags', 'no_duration_filesize', '-f', 'flv', fullRtmpUrl);
   return args;
 };
 

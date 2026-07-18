@@ -145,3 +145,45 @@ export const fetchYouTubeVideos = async (token?: string | null): Promise<VideoIt
     };
   });
 };
+
+// 4. Atualiza o título da transmissão ao vivo ativa
+export const updateYouTubeLiveTitle = async (token: string, newTitle: string): Promise<boolean> => {
+  if (!token) return false;
+  try {
+    // Busca o broadcast persistente ("Stream Now" padrão) ou qualquer um ativo
+    const activeRes = await fetch(
+      `https://youtube.googleapis.com/youtube/v3/liveBroadcasts?part=snippet&broadcastType=persistent&mine=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!activeRes.ok) return false;
+    const activeData = await activeRes.json();
+    if (!activeData.items || activeData.items.length === 0) {
+      console.warn('Nenhuma live persistente encontrada para atualizar o título.');
+      return false; 
+    }
+
+    const broadcast = activeData.items[0];
+    const snippet = broadcast.snippet;
+    snippet.title = newTitle; // Atualiza apenas o título
+
+    // Atualiza o broadcast na API (requer o objeto snippet inteiro + id)
+    const updateRes = await fetch(
+      `https://youtube.googleapis.com/youtube/v3/liveBroadcasts?part=snippet`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          id: broadcast.id,
+          snippet: snippet
+        })
+      }
+    );
+    return updateRes.ok;
+  } catch (e) {
+    console.error('Erro ao atualizar título da live no YouTube:', e);
+    return false;
+  }
+};
