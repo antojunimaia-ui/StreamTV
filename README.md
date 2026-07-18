@@ -50,6 +50,9 @@ O **StreamTV** é uma aplicação desktop open-source que permite a criadores de
 |---|---|
 | **📺 Modo Transmissão** | Player fullscreen sincronizado com o relógio do sistema. Sai e volta? Ele recalcula o *offset* e retoma do segundo exato. |
 | **📅 Grade de Programação** | Timeline horizontal estilo TV a cabo com blocos visuais posicionados por horário e duração real. |
+| **🔄 Modo Playlist** | Escolha entre agendamento por horário fixo ou reprodução contínua (looping circular) dos vídeos da fileira atual. |
+| **👁️ Preview WYSIWYG** | Visualize exatamente como os overlays de texto, relógio e ticker ficarão na transmissão diretamente no player da interface. |
+| **📝 Título Dinâmico** | Altere o título da sua live diretamente do app e atualize automaticamente o título do seu broadcast no YouTube ao iniciar a transmissão. |
 | **📁 Importação Local** | Selecione uma pasta e todos os `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov` são listados automaticamente com duração real extraída. |
 | **📂 Fileiras Temáticas** | Crie programas (ex: *Reacts*, *Gameplay*, *Séries*) como linhas separadas na grade, organizados por categoria. |
 | **🔗 OAuth Nativo** | Vincule Twitch e YouTube via fluxo OAuth real — sem abrir browser externo. Tokens obtidos diretamente pelo Electron. |
@@ -175,6 +178,9 @@ StreamTV/
 - [x] Persistência da grade (salvar/carregar agendamentos em JSON local)
 - [x] Exportação de stream via RTMP (YouTube/Twitch/Facebook/Custom)
 - [x] Auto-switch entre vídeo e screensaver durante transmissão
+- [x] Modo Playlist (loop de vídeo contínuo) além de grade fixa
+- [x] Pré-visualização em tempo real (WYSIWYG) dos overlays de texto na interface
+- [x] Atualização automática de metadados/título integrada ao YouTube Live
 - [ ] Gestão de fillers (conteúdo para lacunas na grade)
 - [ ] Sistema de notificações para troca de programa
 - [ ] Geração de thumbnail automática via FFmpeg
